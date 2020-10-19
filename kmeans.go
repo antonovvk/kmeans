@@ -1,6 +1,7 @@
 package kmeans
 
 import (
+	"fmt"
 	"math"
 	"math/rand"
 )
@@ -13,6 +14,7 @@ type Observation []float64
 // Update and computeation becomes more efficient
 type ClusteredObservation struct {
 	ClusterNumber int
+	Distance      float64
 	Observation
 }
 
@@ -103,14 +105,21 @@ func seed(data []ClusteredObservation, k int, distanceFunction DistanceFunction)
 }
 
 // K-Means Algorithm
-func kmeans(data []ClusteredObservation, mean []Observation, distanceFunction DistanceFunction, threshold int) ([]ClusteredObservation, error) {
+func kmeans(data []ClusteredObservation, mean []Observation, distanceFunction DistanceFunction, threshold int) ([]ClusteredObservation, float64, error) {
 	counter := 0
+	var sumDist float64
 	for ii, jj := range data {
-		closestCluster, _ := near(jj, mean, distanceFunction)
+		closestCluster, dist := near(jj, mean, distanceFunction)
+		if math.IsNaN(dist) {
+			return nil, 0, fmt.Errorf("Initial distance is NaN for point %d: %v", ii, jj)
+		}
 		data[ii].ClusterNumber = closestCluster
+		data[ii].Distance = dist
+		sumDist += data[ii].Distance
 	}
 	mLen := make([]int, len(mean))
-	for n := len(data[0].Observation); ; {
+	n := len(data[0].Observation)
+	for step := 0; ; step++ {
 		for ii := range mean {
 			mean[ii] = make(Observation, n)
 			mLen[ii] = 0
@@ -124,17 +133,22 @@ func kmeans(data []ClusteredObservation, mean []Observation, distanceFunction Di
 		}
 		var changes int
 		for ii, p := range data {
-			if closestCluster, _ := near(p, mean, distanceFunction); closestCluster != p.ClusterNumber {
+			if closestCluster, dist := near(p, mean, distanceFunction); closestCluster != p.ClusterNumber {
+				if math.IsNaN(dist) {
+					return nil, 0, fmt.Errorf("Distance is NaN at step %d", step)
+				}
 				changes++
 				data[ii].ClusterNumber = closestCluster
+				sumDist += dist - data[ii].Distance
+				data[ii].Distance = dist
 			}
 		}
 		counter++
 		if changes == 0 || counter > threshold {
-			return data, nil
+			return data, sumDist, nil
 		}
 	}
-	return data, nil
+	return data, sumDist, nil
 }
 
 // K-Means Algorithm with smart seeds
@@ -145,10 +159,39 @@ func Kmeans(rawData [][]float64, k int, distanceFunction DistanceFunction, thres
 		data[ii].Observation = jj
 	}
 	seeds := seed(data, k, distanceFunction)
-	clusteredData, err := kmeans(data, seeds, distanceFunction, threshold)
+	clusteredData, _, err := kmeans(data, seeds, distanceFunction, threshold)
 	labels := make([]int, len(clusteredData))
 	for ii, jj := range clusteredData {
 		labels[ii] = jj.ClusterNumber
 	}
 	return labels, err
+}
+
+func RepeatedKmeans(rawData [][]float64, k, r int, distanceFunction DistanceFunction, threshold int) ([]int, error) {
+	bestRun := -1
+	bestDist := float64(-1)
+	labels := make([][]int, r)
+	for run := 0; run < r; run++ {
+		// Just for fun
+		rand.Seed(int64(run))
+
+		data := make([]ClusteredObservation, len(rawData))
+		for ii, jj := range rawData {
+			data[ii].Observation = jj
+		}
+		seeds := seed(data, k, distanceFunction)
+		clusteredData, sumDist, err := kmeans(data, seeds, distanceFunction, threshold)
+		if err != nil {
+			return nil, err
+		}
+		labels[run] = make([]int, len(clusteredData))
+		for ii, jj := range clusteredData {
+			labels[run][ii] = jj.ClusterNumber
+		}
+		if bestDist == -1 || sumDist < bestDist {
+			bestDist = sumDist
+			bestRun = run
+		}
+	}
+	return labels[bestRun], nil
 }
