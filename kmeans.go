@@ -69,7 +69,7 @@ func (observation Observation) OuterProduct(otherObservation Observation) [][]fl
 
 // Find the closest observation and return the distance
 // Index of observation, distance
-func near(p ClusteredObservation, mean []Observation, distanceFunction DistanceFunction) (int, float64) {
+func (p ClusteredObservation) near(mean []Observation, distanceFunction DistanceFunction) (int, float64) {
 	indexOfCluster := 0
 	minSquaredDistance, _ := distanceFunction(p.Observation, mean[0])
 	for i := 1; i < len(mean); i++ {
@@ -82,6 +82,17 @@ func near(p ClusteredObservation, mean []Observation, distanceFunction DistanceF
 	return indexOfCluster, math.Sqrt(minSquaredDistance)
 }
 
+func (p *ClusteredObservation) update(mean []Observation, distanceFunction DistanceFunction) (bool, error) {
+	cc, dist := p.near(mean, distanceFunction)
+	if math.IsNaN(dist) {
+		return false, fmt.Errorf("Distance is NaN")
+	}
+	upd := p.ClusterNumber != cc
+	p.ClusterNumber = cc
+	p.Distance = dist
+	return upd, nil
+}
+
 // Instead of initializing randomly the seeds, make a sound decision of initializing
 func seed(data []ClusteredObservation, k int, distanceFunction DistanceFunction) []Observation {
 	s := make([]Observation, k)
@@ -90,7 +101,7 @@ func seed(data []ClusteredObservation, k int, distanceFunction DistanceFunction)
 	for ii := 1; ii < k; ii++ {
 		var sum float64
 		for jj, p := range data {
-			_, dMin := near(p, s[:ii], distanceFunction)
+			_, dMin := p.near(s[:ii], distanceFunction)
 			d2[jj] = dMin * dMin
 			sum += d2[jj]
 		}
@@ -106,20 +117,19 @@ func seed(data []ClusteredObservation, k int, distanceFunction DistanceFunction)
 
 // K-Means Algorithm
 func kmeans(data []ClusteredObservation, mean []Observation, distanceFunction DistanceFunction, threshold int) ([]ClusteredObservation, float64, error) {
-	counter := 0
 	var sumDist float64
-	for ii, jj := range data {
-		closestCluster, dist := near(jj, mean, distanceFunction)
-		if math.IsNaN(dist) {
-			return nil, 0, fmt.Errorf("Initial distance is NaN for point %d: %v", ii, jj)
+	for ii := range data {
+		if _, err := data[ii].update(mean, distanceFunction); err != nil {
+			return nil, 0, err
 		}
-		data[ii].ClusterNumber = closestCluster
-		data[ii].Distance = dist
 		sumDist += data[ii].Distance
 	}
+
 	mLen := make([]int, len(mean))
 	n := len(data[0].Observation)
+	counter := 0
 	for step := 0; ; step++ {
+		sumDist = 0
 		for ii := range mean {
 			mean[ii] = make(Observation, n)
 			mLen[ii] = 0
@@ -132,20 +142,17 @@ func kmeans(data []ClusteredObservation, mean []Observation, distanceFunction Di
 			mean[ii].Mul(1 / float64(mLen[ii]))
 		}
 		var changes int
-		for ii, p := range data {
-			if closestCluster, dist := near(p, mean, distanceFunction); closestCluster != p.ClusterNumber {
-				if math.IsNaN(dist) {
-					return nil, 0, fmt.Errorf("Distance is NaN at step %d", step)
-				}
+		for ii := range data {
+			if upd, err := data[ii].update(mean, distanceFunction); err != nil {
+				return nil, 0, err
+			} else if upd {
 				changes++
-				data[ii].ClusterNumber = closestCluster
-				sumDist += dist - data[ii].Distance
-				data[ii].Distance = dist
 			}
+			sumDist += data[ii].Distance
 		}
 		counter++
 		if changes == 0 || counter > threshold {
-			return data, sumDist, nil
+			break
 		}
 	}
 	return data, sumDist, nil
